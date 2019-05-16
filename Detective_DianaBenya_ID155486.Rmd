@@ -1,0 +1,273 @@
+---
+title: 'Data Science 4: Unstructured Text Analysis - CEU 2019'
+author: 'Diana Benya'
+date: '2019-05-16'
+output:
+  html_document: default
+---
+My aim was to figure out the perpetrator in a Sherlock novel without reading the novel itself. I was interested whether I can figure out a text analysing method with which I should not read a crime novel to know who was the perpetrator, but I link the novel into the below program and at the end it will show the perpetrator in the book.
+
+First, I used a sentiment analysis. I supposed that the novel would contain a lots of negative sentiment words around the name of the perpetrator, so I analysed this theory.
+
+Secondly, I set up a map connecting the names within the book as my assumption was that it will somehow show who could be the perpetrator. It would either show by having the most connection with other characters in the book or potentially the most connection with Sherlock in the novel.
+
+```{r}
+install.packages("plyr")
+library(plyr)
+install.packages("rvest")
+library(rvest)
+install.packages("tidytext")
+library(tidytext)
+install.packages("tidyverse")
+library(tidyverse)
+install.packages("magrittr")
+library(magrittr)
+install.packages("zoo")
+library(zoo)
+install.packages("babynames")
+library(babynames)
+install.packages("dplyr")
+library(dplyr)
+install.packages("ggplot2")
+library(ggplot2)
+install.packages("igraph")
+library(igraph)
+install.packages("ggraph")
+library(ggraph)
+install.packages("widyr")
+library(widyr)
+```
+I have chosen an Arthur Conan Doyle novel titled "The sign of the Four". After downloading the text from the web, I have converted it into text.
+
+```{r}
+# Reading the HTML code from the website
+sherlock<-read_html("https://sherlock-holm.es/stories/html/sign.html")
+
+# Using CSS selectors to scrap the text
+sherlock <- html_nodes(sherlock,'p')
+
+# Converting to text
+sherlock <- html_text(sherlock)
+
+```
+
+I have taken the first 85% of the text to analyse, as at the end the person of the villain is highlighted by Sherlock. 
+I deleted stop words. 
+
+```{r}
+# Putting Text into a Data Frame
+sherlock_df <- data_frame(line = 1:1, text = sherlock)
+head(sherlock_df, 1)
+
+# Tokenization
+sherlock_1 <- sherlock_df %>%
+  unnest_tokens(word, text)
+
+# Counting the most frequent words
+sherlock_count <- count(sherlock_1,vars="word") 
+
+# Analyse the first 85% of text
+n <-0.85*(nrow(sherlock_1))
+sherlock_1 <- head(sherlock_1, n = n)
+
+# Remove stop words
+data(stop_words)
+sherlock_1 <- sherlock_1 %>%
+  anti_join(stop_words,by=c("word"="word"))
+
+sherlock_1$line <- NULL
+```
+
+I used the babynames library to identify names in the novel.
+
+```{r}
+# Create names
+names <- babynames %>% 
+  select(word=name) %>% 
+  mutate(word=tolower(word))
+
+names <- names %>%
+  count(word, sort=TRUE) 
+names$n<- NULL
+```
+
+I added names of the characters in the book, Sholto and Small. I needed this as the names library  did not contain these names and their surname was used in the novel.
+
+```{r}
+add <- data.frame(word=c("sholto","small"))
+names<- rbind(names, add)
+
+
+# Identify names in the text
+sherlock_names <- sherlock_1 %>%
+ semi_join(names,by=c("word"="word"))
+
+sherlock_names$line <- NULL
+
+head(sherlock_names, n=20)
+
+sherlock_names_count <- sherlock_names %>%
+  count(word, sort=TRUE) 
+
+sherlock_names_count
+```
+After the name holmes, the most frequent names are: treasure, sholto and day.
+
+I paired up the tokenized words with the afinn library's sentiment scores. After that I created group of 3,5,7,9 and 11 words and scores around the names in the book. I calculated the average of the assigned negative scores and received a names list with the average negative scores around them. 
+
+```{r}
+# Sentiments for 85% of the text
+afinn <- sherlock_1 %>% 
+  left_join(get_sentiments("afinn"))
+
+# Sentiments of 5-, 7-, 9- and 11-grams
+afinn$score <- as.numeric(afinn$score)
+afinn[is.na(afinn)] <- 0
+afinn <- afinn %>% mutate(score3 = round(rollmean(score,3,fill=NA),2),
+                          score5 = round(rollmean(score,5,fill=NA),2),
+                          score7 = round(rollmean(score,7,fill=NA),2),
+                          score9 = round(rollmean(score,9,fill=NA),2),
+                          score11 = round(rollmean(score,11,fill=NA),2))
+
+# Filter 5-, 7-,9- and 11-grams by names
+names_afinn <- afinn %>% 
+  semi_join(sherlock_names,by=c("word"="word"))
+
+names_afinn_2 <- names_afinn %>%
+  group_by(word) %>% 
+  summarise_each(list(sum))
+
+name_by_3 <- names_afinn_2 %>% 
+  select(word,score3)%>%
+  arrange(score3)
+
+name_by_5<- names_afinn_2 %>% 
+  select(word,score5)%>%
+  arrange(score5)
+
+name_by_7<- names_afinn_2 %>% 
+  select(word,score7)%>%
+  arrange(score7)
+
+name_by_9<- names_afinn_2 %>% 
+  select(word,score9)%>%
+  arrange(score9)
+
+name_by_11<- names_afinn_2 %>% 
+  select(word,score11)%>%
+  arrange(score11)
+```
+My assumption was that the names with the lowest scores will show the name of the perpetrator. It is Sholto in my analysis.
+
+```{r}
+# Who is the Perpetrator?
+perpetrator <- join_all(list(name_by_5, name_by_7, name_by_9, name_by_11), by = "word", type='left')
+head(perpetrator, n=20)
+```
+
+After checking the internet it turned out the method was successful. Based on these sources the major villain is John Sholto and Jonathan Small.  Source: https://owlcation.com/humanities/Plot-Summary-of-The-Sign-of-Four
+
+I was interested whether I can use a graphic "detective"" method as well. I connected the names that are not further than 10 words apart in the novel into bigrams. 
+
+```{r}
+
+names <- names %>% 
+  mutate(score = 1)
+
+sherlock_2 <- sherlock_1%>%
+  left_join(names,by=c("word"="word"))
+  
+
+sherlock_2 [is.na(sherlock_2)] <- 0
+
+sherlock_2<- sherlock_2 %>% mutate (lag_2= ifelse(score %in% 1 & lag(score,2) %in% 1, lag(word, 2),0),
+                                    lag_3= ifelse(score %in% 1 & lag(score,3) %in% 1, lag(word, 3),0),
+                                    lag_4= ifelse(score %in% 1 & lag(score,4) %in% 1, lag(word, 4),0),
+                                    lag_5= ifelse(score %in% 1 & lag(score,5) %in% 1, lag(word, 5),0),
+                                    lag_6= ifelse(score %in% 1 & lag(score,6) %in% 1, lag(word, 6),0),
+                                    lag_7= ifelse(score %in% 1 & lag(score,7) %in% 1, lag(word, 7),0),
+                                    lag_8= ifelse(score %in% 1 & lag(score,8) %in% 1, lag(word, 8),0),
+                                    lag_9= ifelse(score %in% 1 & lag(score,9) %in% 1, lag(word, 9),0),
+                                    lag_10= ifelse(score %in% 1 & lag(score,10) %in% 1, lag(word, 10),0)
+                                    )
+
+bigram2 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_2) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+  
+bigram3 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_3) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram4 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_4) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram5 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_5) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram6 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_6) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram7 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_7) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram8 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_8) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram9 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_9) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram10 <- sherlock_2 %>% 
+            mutate (word1= word, word2= lag_10) %>% 
+            select (word1, word2) %>%
+            mutate (word2 = ifelse(word2 %in% 0, NA, word2))
+
+bigram <- rbind(bigram2,
+                bigram3,
+                bigram4,
+                bigram5,
+                bigram6,
+                bigram7,
+                bigram8,
+                bigram9,
+                bigram10)
+
+bigram <- na.omit(bigram)
+
+```
+My assumption was that the perpetrator should connect with most of the characters -and especially Sherlock-  in the book and by the most times. 
+This was again right as this method shows again Sholto as the perpetrator having the most connections to Sherlock and others.
+
+I have tried this same program with minor chages on other Sherlock novels and it worked fairly well with other stories as well.
+
+```{r}
+bigram_word_pairs <- bigram %>% 
+  pairwise_count(word1, word2, sort = TRUE, upper = FALSE)
+
+set.seed(1234)
+bigram_word_pairs %>%
+  filter(n >= 15) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()
+
+```
+
